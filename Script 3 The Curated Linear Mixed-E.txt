@@ -1,0 +1,46 @@
+Script 3: The Curated Linear Mixed-Effects Pipeline (limma-voom)Use this workflow to treat subjects as random effects, map your hypothesis-driven immune panel (including FOXO1), and track multi-tier targets before unblinding.
+
+library(edgeR)
+library(limma)
+
+# 1. Define the curated panel
+supervised_immune_panel <- c(
+  "TNF", "IL6", "IL1B", "IL10", "IL1A", "IL2", "IL4", "IL5", "IL12A", "IL12B", 
+  "IL13", "IL15", "IL17A", "IL18", "IL23A", "IFNG", "IFNA1", "IFI27", "DEFA1",
+  "CXCL8", "CXCL10", "CXCL9", "CXCL11", "CCL2", "CCL3", "CCL4", "CCL5", "TRBC1",
+  "CD3E", "CD3G", "CD4", "CD8A", "CD2", "CD163", "CD177", "CD248", "CD300A", 
+  "CD300C", "CD300E", "SPP1", "ALOX15B", "PER1", "TGFB1", "TGFB2", "NFKB1", 
+  "RELA", "STAT1", "STAT3", "JAK1", "IRF7", "TLR2", "TLR4", "MYD88", "MMP9", 
+  "TIMP1", "TIMP2", "SELL", "ICAM1", "ITGB2", "INPP5D", "PTGS2", "NOS2",
+  "NLRP3", "CASP1", "IL1R1", "TNFRSF1A", "IL10RA", "FOXP3", "GATA3", "TBX21",
+  "FOXO1"
+)
+
+# 2. Extract and structure subset matrices
+available_genes <- supervised_immune_panel[supervised_immune_panel %in% rownames(counts2)]
+counts_targeted <- counts2[available_genes, ]
+dge_targeted    <- DGEList(counts = counts_targeted)
+dge_targeted$samples$group <- time_factor
+
+# 3. Create time-course design layout
+design_time <- model.matrix(~ 0 + time_factor)
+colnames(design_time) <- c("BL", "W12", "W24")
+
+# 4. Mandatory candidate filtering and voom precision transformation
+keep_targeted <- filterByExpr(dge_targeted, design_time)
+dge_targeted    <- dge_targeted[keep_targeted, , keep.lib.sizes = FALSE]
+dge_targeted    <- normLibSizes(dge_targeted)
+v <- voom(dge_targeted, design_time, plot = FALSE)
+
+# 5. Calculate intra-subject longitudinal random intercept correlations
+dup_corr  <- duplicateCorrelation(v, design_time, block = subject)
+fit_mixed <- lmFit(v, design_time, block = subject, correlation = dup_corr$consensus)
+
+# 6. Fit contrasts and apply empirical Bayes adjustments
+contrast_matrix <- makeContrasts(W12_vs_BL = W12 - BL, W24_vs_BL = W24 - BL, levels = design_time)
+fit_contrast    <- contrasts.fit(fit_mixed, contrast_matrix)
+fit_eb          <- eBayes(fit_contrast)
+
+# 7. Isolate milestone tables
+w12_table <- topTable(fit_eb, coef = "W12_vs_BL", n = Inf, sort.by = "none")
+w24_table <- topTable(fit_eb, coef = "W24_vs_BL", n = Inf, sort.by = "none")

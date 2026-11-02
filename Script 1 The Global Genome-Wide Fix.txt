@@ -1,0 +1,64 @@
+Script 1: The Global Genome-Wide Fixed-Effects Pipeline (edgeR)Use this code to run your unbiased whole-genome analysis, generate the final candidate table, and export a clean Excel-ready dataset.
+
+library(edgeR)
+library(gplots)
+library(VennDiagram)
+
+# 1. Initialize the DGEList with raw integer counts
+dge <- DGEList(counts = counts2)
+
+# 2. Extract longitudinal subject IDs and assign timepoints
+subject <- factor(substr(colnames(counts2), 1, 5))
+time_factor <- factor(rep(c("BL", "W12", "W24"), each = 12), levels = c("BL", "W12", "W24"))
+dge$samples$group <- time_factor
+
+# 3. Filter low-count genes safely to protect DGEList structure
+keep <- filterByExpr(dge)
+dge <- dge[keep, , keep.lib.sizes = FALSE]
+
+# 4. Normalize library sizes to account for globin composition bias
+dge <- normLibSizes(dge)
+
+# 5. Build the paired design matrix (Blocking patient backgrounds)
+design_paired <- model.matrix(~ subject + time_factor)
+
+# 6. Estimate dispersions and fit the Quasi-Likelihood model
+dge <- estimateDisp(dge, design_paired)
+fit_paired <- glmQLFit(dge, design_paired)
+
+# 7. Execute tests against Baseline (BL)
+res_W12_vs_BL <- glmQLFTest(fit_paired, coef = "time_factorW12")
+res_W24_vs_BL <- glmQLFTest(fit_paired, coef = "time_factorW24")
+
+# 8. Extract raw tables
+all_tags <- topTags(res_W12_vs_BL, n = Inf)$table
+all_tags_w24 <- topTags(res_W24_vs_BL, n = Inf)$table
+
+# 9. Isolate candidates using custom thresholds (Raw P < 0.01 and |logFC| >= 1)
+candidate_genes     <- all_tags[all_tags$PValue < 0.01 & abs(all_tags$logFC) >= 1, ]
+candidate_genes_w24 <- all_tags_w24[all_tags_w24$PValue < 0.01 & abs(all_tags_w24$logFC) >= 1, ]
+
+w12_names <- rownames(candidate_genes)
+w24_names <- rownames(candidate_genes_w24)
+
+# 10. Partition genes into Core, Early, and Late categories
+shared_genes <- intersect(w12_names, w24_names)
+w24_only     <- setdiff(w24_names, w12_names)
+
+# 11. Create and export the master candidate table
+w12_stats <- all_tags[unique(c(w12_names, w24_names)), c("logFC", "logCPM", "F", "PValue", "FDR")]
+w24_stats <- all_tags_w24[unique(c(w12_names, w24_names)), c("logFC", "logCPM", "F", "PValue", "FDR")]
+colnames(w12_stats) <- paste0(colnames(w12_stats), "_W12")
+colnames(w24_stats) <- paste0(colnames(w24_stats), "_W24")
+
+master_export <- cbind(Gene_Symbol = rownames(w12_stats), w12_stats, w24_stats)
+master_export$Response_Type <- "Early-Only (W12)"
+master_export$Response_Type[master_export$Gene_Symbol %in% shared_genes] <- "Core (Both)"
+master_export$Response_Type[master_export$Gene_Symbol %in% w24_only] <- "Late-Only (W24)"
+
+master_export <- master_export[, c("Gene_Symbol", "Response_Type", 
+                                    "logFC_W12", "PValue_W12", "FDR_W12", "logCPM_W12", "F_W12",
+                                    "logFC_W24", "PValue_W24", "FDR_W24", "logCPM_W24", "F_W24")]
+master_export <- master_export[order(master_export$Response_Type, master_export$PValue_W12), ]
+
+write.csv(master_export, file = "Supplementary_Table_87_Candidates.csv", row.names = FALSE)

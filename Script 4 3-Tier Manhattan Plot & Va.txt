@@ -1,0 +1,65 @@
+Script 4: 3-Tier Manhattan Plot & Validation TablesRun this final section to build your publication-ready 3-tier plot (with aligned labels) and export verifying checks 2A, 2B, and 2C.
+
+# --- FIGURE 3: Polished 3-Tier Manhattan Graph ---
+manhattan_data <- w24_table
+manhattan_data$Gene <- rownames(manhattan_data)
+manhattan_data <- manhattan_data[order(manhattan_data$Gene), ]
+manhattan_data$X_Index <- 1:nrow(manhattan_data)
+manhattan_data$log10P   <- -log10(manhattan_data$P.Value)
+
+fdr_05_pvalue   <- max(manhattan_data$P.Value[manhattan_data$adj.P.Val < 0.05])
+fdr_line_height <- -log10(fdr_05_pvalue)
+raw_line_height <- 1.301
+
+manhattan_data$Plot_Color <- "#3A86C8" 
+manhattan_data$Plot_Color[manhattan_data$log10P >= raw_line_height] <- "#E69F00" 
+manhattan_data$Plot_Color[manhattan_data$log10P >= fdr_line_height] <- "#E05A47"
+
+png("Figure3_Hypothesis_3Tier_Final.png", width = 2400, height = 1800, res = 300)
+par(mar = c(7, 5, 4, 2))
+
+plot(manhattan_data$X_Index, manhattan_data$log10P, col = manhattan_data$Plot_Color,
+     pch = ifelse(manhattan_data$log10P >= raw_line_height, 19, 1), cex = 1.3, xaxt = "n", xlab = "", 
+     ylab = expression(-log(italic(P)*"-Value")), main = "Immune Panel 3-Tier Exploratory Profile (Week 24 vs BL)",
+     ylim = c(0, max(manhattan_data$log10P) + 1))
+
+abline(h = fdr_line_height, col = "#B03A27", lty = 2, lwd = 1.5)
+text(x = max(manhattan_data$X_Index)*0.85, y = fdr_line_height + 0.15, labels = "Panel FDR < 0.05", col = "#B03A27", cex = 0.65, font = 2)
+abline(h = raw_line_height, col = "#D55E00", lty = 3, lwd = 1.5)
+text(x = max(manhattan_data$X_Index)*0.85, y = raw_line_height - 0.15, labels = "Raw P < 0.05", col = "#D55E00", cex = 0.65, font = 2)
+
+axis(1, at = manhattan_data$X_Index, labels = FALSE, tick = TRUE)
+text(x = manhattan_data$X_Index, y = par("usr") - 0.2, labels = manhattan_data$Gene, srt = 90, adj = 1, xpd = TRUE, cex = 0.5)
+
+tier1_subset <- manhattan_data[manhattan_data$log10P >= fdr_line_height, ]
+text(x = tier1_subset$X_Index, y = tier1_subset$log10P + 0.3, labels = tier1_subset$Gene, col = "black", font = 2, cex = 0.75)
+tier2_subset <- manhattan_data[manhattan_data$log10P >= raw_line_height & manhattan_data$log10P < fdr_line_height, ]
+text(x = tier2_subset$X_Index, y = tier2_subset$log10P + 0.3, labels = tier2_subset$Gene, col = "#B36B00", font = 3, cex = 0.7)
+dev.off()
+
+
+# --- EXPORT EXCEL-READY COMPONENT TABLES (2A, 2B, 2C) ---
+# Table 2A: W12 FDR validation
+w12_fdr_check <- w12_table[w12_table$adj.P.Val < 0.05, ]
+supp_table_2A <- if(nrow(w12_fdr_check) == 0) data.frame(Gene_Symbol="None", Status="No active panel transcripts reached genome-wide significance thresholds (FDR < 0.05) at Week 12.") else data.frame(Gene_Symbol=rownames(w12_fdr_check), w12_fdr_check)
+write.csv(supp_table_2A, file = "Supplementary_Table_2A_W12_FDR_Significance_Check.csv", row.names = FALSE)
+
+# Table 2B: W12 Nominal validation
+w12_raw_check <- w12_table[w12_table$P.Value < 0.05, ]
+supp_table_2B <- if(nrow(w12_raw_check) == 0) data.frame(Gene_Symbol="None", Status="No active panel transcripts reached loose exploratory nominal thresholds (Raw P < 0.05) at Week 12.") else data.frame(Gene_Symbol=rownames(w12_raw_check), w12_raw_check)
+write.csv(supp_table_2B, file = "Supplementary_Table_2B_W12_Nominal_Significance_Check.csv", row.names = FALSE)
+
+# Table 2C: W24 Master Source Matrix
+manhattan_export <- w24_table
+manhattan_export$Gene_Symbol <- rownames(manhattan_export)
+manhattan_export <- manhattan_export[order(manhattan_export$Gene_Symbol), ]
+manhattan_export$Negative_Log10_PValue <- -log10(manhattan_export$P.Value)
+
+manhattan_export$Exploratory_Classification <- "Tier 3: Unchanged (Negative Log10 P < 1.3)"
+manhattan_export$Exploratory_Classification[manhattan_export$Negative_Log10_PValue >= raw_line_height] <- "Tier 2: Potential Blinded Hypotheses (Nominal P < 0.05)"
+manhattan_export$Exploratory_Classification[manhattan_export$Negative_Log10_PValue >= fdr_line_height] <- "Tier 1: Breakthrough Significant Signature (Panel FDR < 0.05)"
+
+supp_table_2C <- manhattan_export[, c("Gene_Symbol", "Exploratory_Classification", "logFC", "P.Value", "adj.P.Val", "Negative_Log10_PValue")]
+colnames(supp_table_2C) <- c("Gene_Symbol", "Exploratory_Classification", "Log2_Fold_Change_W24", "Raw_PValue_W24", "Adjusted_FDR_W24", "Negative_Log10_PValue_Height")
+supp_table_2C <- supp_table_2C[order(supp_table_2C$Exploratory_Classification, supp_table_2C$Raw_PValue_W24), ]
+write.csv(supp_table_2C, file = "Supplementary_Table_2C_W24_Manhattan_Plot_Source_Data.csv", row.names = FALSE)

@@ -1,0 +1,178 @@
+ ==============================================================================
+# PIPELINE: Supervised Immune Panel Analysis & Manhattan Plot
+# WORKFLOW: Filter Loci -> Deduplicate Coordinates -> pheatmap -> Targeted ggplot2
+# TARGETS:  71 Curated Immune Genes (Arm B vs Arm A at Week 12)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# STEP 0: Load Required Libraries
+# ------------------------------------------------------------------------------
+library(edgeR)
+library(pheatmap)
+library(org.Hs.eg.db)
+library(ggplot2)
+library(ggrepel)
+library(openxlsx)
+
+# Assumed active objects from previous steps:
+# 'res_df'   -> Your complete edgeR top_genes table (row names = Symbols)
+# 'log2_cpm' -> Your normalized matrix of log2 counts-per-million values
+# 'sample_info' -> Data frame with sample annotations ("GroupA" / "GroupB")
+
+# ------------------------------------------------------------------------------
+# STEP 1: Define Targeted 71-Gene Immune Panel
+# ------------------------------------------------------------------------------
+immune_panel <- c(
+  "TNF", "IL6", "IL1B", "IL10", "IL1A", "IL2", "IL4", "IL5", "IL12A", "IL12B", 
+  "IL13", "IL15", "IL17A", "IL18", "IL23A", "IFNG", "IFNA1", "IFI27", "DEFA1",
+  "CXCL8", "CXCL10", "CXCL9", "CXCL11", "CCL2", "CCL3", "CCL4", "CCL5", "TRBC1",
+  "CD3E", "CD3G", "CD4", "CD8A", "CD2", "CD163", "CD177", "CD248", "CD300A", 
+  "CD300C", "CD300E", "SPP1", "ALOX15B", "PER1", "TGFB1", "TGFB2", "NFKB1", 
+  "RELA", "STAT1", "STAT3", "JAK1", "IRF7", "TLR2", "TLR4", "MYD88", "MMP9", 
+  "TIMP1", "TIMP2", "SELL", "ICAM1", "ITGB2", "INPP5D", "PTGS2", "NOS2",
+  "NLRP3", "CASP1", "IL1R1", "TNFRSF1A", "IL10RA", "FOXP3", "GATA3", "TBX21",
+  "FOXO1"
+)
+
+# Filter down to panel genes that successfully passed low-count filters in edgeR
+present_genes <- intersect(immune_panel, rownames(res_df))
+message("Targeted Filtering: ", length(present_genes), " out of ", length(immune_panel), " immune genes found in dataset.")
+
+# ------------------------------------------------------------------------------
+# STEP 2: Generate Supervised Heatmap (All Detected Panel Genes)
+# ------------------------------------------------------------------------------
+supervised_heatmap_data <- log2_cpm[present_genes, ]
+
+# Custom colors matching previous figures (adjust colors if desired)
+ann_colors <- list(Group = c(GroupA = "#377eb8", GroupB = "#e41a1c"))
+
+pheatmap(
+  supervised_heatmap_data, 
+  annotation_col           = sample_info,
+  annotation_colors        = ann_colors,
+  scale                    = "row",                    # Standard row Z-score normalization
+  clustering_distance_rows = "correlation",           # Group functionally co-expressed immune blocks
+  clustering_distance_cols = "euclidean",             # Evaluate if blind samples cluster by immune profiles
+  show_rownames            = TRUE,                    
+  show_colnames            = TRUE,
+  color                    = colorRampPalette(c("navy", "white", "firebrick3"))(50),
+  filename                 = "Figure4_Supervised_Immune_Heatmap.pdf",
+  width                    = 8,
+  height                   = 11                       # Taller page to clear text spacing for all 71 rows
+)
+
+# ------------------------------------------------------------------------------
+# STEP 3: Fetch Genomic Coordinates & Fix Transcript Duplications
+# ------------------------------------------------------------------------------
+# 1. Pull locations from database
+gene_coords <- select(org.Hs.eg.db, 
+                      keys = present_genes, 
+                      columns = c("CHR", "CHRLOC"), 
+                      keytype = "SYMBOL")
+
+# 2. Drop rows missing chromosome keys and filter off non-standard scaffolds
+gene_coords <- na.omit(gene_coords)
+gene_coords <- gene_coords[!grepl("alt|random|un|fix", gene_coords$CHR, ignore.case=TRUE), ]
+
+# 3. Derive absolute Base-Pair numbers from strand tracking locations
+gene_coords$BP <- abs(gene_coords$CHRLOC)
+
+# 4. Convert structural sex chromosomes to matching continuum numbers
+gene_coords$CHR_NUM <- gene_coords$CHR
+gene_coords$CHR_NUM[gene_coords$CHR_NUM == "X"] <- "23"
+gene_coords$CHR_NUM[gene_coords$CHR_NUM == "Y"] <- "24"
+gene_coords$CHR_NUM <- as.numeric(gene_coords$CHR_NUM)
+
+# 5. Merge coordinates together with edgeR stats
+panel_res_df <- res_df[present_genes, ]
+manhattan_data <- merge(gene_coords, panel_res_df, by.x = "SYMBOL", by.y = "row.names")
+manhattan_data$logP <- -log10(manhattan_data$PValue)
+
+# --- CRITICAL FIX: Eliminate alternate transcript rows to flatten overlapping text lines ---
+manhattan_data <- manhattan_data[!duplicated(manhattan_data$SYMBOL), ]
+
+# ------------------------------------------------------------------------------
+# STEP 4: Classify and Color-Code Blinded Status
+# ------------------------------------------------------------------------------
+manhattan_data$Significance_Status <- "Non-Significant (p > 0.1)"
+
+manhattan_data$Significance_Status[manhattan_data$PValue <= 0.1 & manhattan_data$PValue > 0.05] <- 
+  "Potentially Significant (0.05 < p <= 0.1)"
+
+manhattan_data$Significance_Status[manhattan_data$PValue <= 0.05] <- 
+  "Significant (p <= 0.05)"
+
+# Lock categorical sorting tiers for the legend display
+manhattan_data$Significance_Status <- factor(
+  manhattan_data$Significance_Status, 
+  levels = c("Significant (p <= 0.05)", "Potentially Significant (0.05 < p <= 0.1)", "Non-Significant (p > 0.1)")
+)
+
+# Custom color palette matching the requested blinded theme setup
+status_colors <- c(
+  "Significant (p <= 0.05)"                   = "#d95f02", # Solid highlight tone
+  "Potentially Significant (0.05 < p <= 0.1)" = "#7570b3", # Purple candidate tracking tone
+  "Non-Significant (p > 0.1)"                 = "#b3b3b3"  # Neutral background gray
+)
+
+# ------------------------------------------------------------------------------
+# STEP 5: Build and Save the Targeted Blinded Manhattan Plot
+# ------------------------------------------------------------------------------
+blinded_manhattan <- ggplot(manhattan_data, aes(x = CHR_NUM, y = logP)) +
+  # Render data points categorized by screening status tier
+  geom_point(aes(color = Significance_Status), size = 3.5, alpha = 0.9) +
+  
+  # Repel text engine to safely anchor strings and lines without stacking errors
+  geom_text_repel(
+    aes(label = SYMBOL, color = Significance_Status),
+    size = 3.2,
+    fontface = "bold",
+    box.padding = 0.4,       # Spacing buffer around text fields
+    point.padding = 0.3,     # Spacing buffer between dot and line anchors
+    max.overlaps = Inf,      # Insures all panel identifiers show up clearly
+    show.legend = FALSE
+  ) +
+  
+  # Standard statistical reference line (Alpha line at p=0.05)
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "darkred", linewidth = 0.8) +
+  
+  # Blind screening expansion reference line (Alpha line at p=0.10)
+  geom_hline(yintercept = -log10(0.1), linetype = "twodash", color = "darkblue", linewidth = 0.8) +
+  
+  # Structure styling elements
+  scale_x_continuous(breaks = 1:24, labels = c(1:22, "X", "Y")) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.2))) + # Generates room at the top for labels
+  scale_color_manual(values = status_colors) +
+  
+  labs(
+    title = "Targeted Immune Panel Manhattan Plot",
+    subtitle = "Blinded Screening Workflow (Arm B vs Arm A)",
+    x = "Chromosome Location",
+    y = expression(-log~(P-Value)),
+    color = "Blinded Screening Status"
+  ) +
+  
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_line(color = "gray90", linetype = "dotted"),
+    plot.title = element_text(face = "bold", size = 14),
+    legend.position = "bottom",
+    legend.box = "horizontal"
+  )
+
+# Export graphic layout to wide-dimension PDF format
+pdf("Figure5_Immune_Manhattan_Blinded_Workflow.pdf", width = 11, height = 7)
+print(blinded_manhattan)
+dev.off()
+
+# ------------------------------------------------------------------------------
+# STEP 6: Save Supervised Data to Master Excel Sheet
+# ------------------------------------------------------------------------------
+wb <- loadWorkbook("differential_expression_and_pathways.xlsx")
+addWorksheet(wb, "Supervised_Immune_Panel")
+panel_excel_data <- cbind(Gene_Symbol = rownames(panel_res_df), panel_res_df)
+writeData(wb, sheet = "Supervised_Immune_Panel", x = panel_excel_data)
+saveWorkbook(wb, file = "differential_expression_and_pathways.xlsx", overwrite = TRUE)
+
+message("--- Supervised Immune Panel pipeline completed successfully! ---")

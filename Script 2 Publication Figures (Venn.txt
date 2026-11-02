@@ -1,0 +1,26 @@
+Script 2: Publication Figures (Venn & Global Heatmap)Run this block to save clean, high-resolution visual assets into your working project folder.
+
+# --- FIGURE 1: Crisp Venn Diagram ---
+options(warn = -1)
+venn.diagram(
+  x = list(Week12 = w12_names, Week24 = w24_names),
+  category.names = c("Week 12 vs BL\n(28 Genes)", "Week 24 vs BL\n(71 Genes)"),
+  filename = 'Figure1_Timecourse_Venn.png', output = TRUE, imagetype = "png",
+  height = 2000, width = 2200, resolution = 300,
+  fill = c("#3A86C8", "#E05A47"), alpha = c(0.6, 0.6), lwd = 2, lty = 'solid',
+  col = c("#2A6698", "#B03A27"), cex = 1.5, fontface = "bold", fontfamily = "sans",
+  cat.cex = 1.2, cat.fontface = "bold", cat.fontfamily = "sans", cat.pos = c(-20, 20), cat.dist = c(0.05, 0.05)
+)
+
+# --- FIGURE 2: Global Heatmap with Margin Fixes ---
+log_cpms <- cpm(dge, log = TRUE)
+full_heatmap_matrix <- log_cpms[unique(c(w12_names, w24_names)), ]
+
+png("Figure2_Global_Heatmap.png", width = 3000, height = 2400, res = 300)
+heatmap.2(full_heatmap_matrix, trace = "none", 
+          col = colorRampPalette(c("#002060", "white", "#C00000"))(100), 
+          scale = "row", density.info = "none",
+          margin = c(12, 10), cexRow = 0.45, cexCol = 0.65, srtCol = 45, adjCol = c(1, 1),
+          lhei = c(1.5, 8), keysize = 1.0,
+          main = "Global Longitudinal Profile (87 Active Candidate Genes)")
+dev.off()
